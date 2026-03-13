@@ -1,0 +1,19 @@
+{
+  "name": "workoutbuddy",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "generate:client": "openapi-typescript http://localhost:8000/openapi.json -o packages/client-sdk/src/index.ts"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["sharp", "unrs-resolver"]
+  }
+}

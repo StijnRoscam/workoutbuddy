@@ -1,43 +1,42 @@
 # Next.js Guidelines
 
-Frontend architecture using Next.js 14/15 App Router.
+Frontend architecture using Next.js 16 (App Router), React 19, and Tailwind CSS v4.
 
 ## App Structure
 
 ```
 apps/web/
 ├─ app/                      # Next.js App Router
-│  ├─ layout.tsx            # Root layout
-│  ├─ page.tsx              # Home page
-│  ├─ globals.css           # Global styles
+│  ├─ layout.tsx            # Root layout (fonts, metadata, html shell)
+│  ├─ page.tsx              # Home / landing page
+│  ├─ globals.css           # Tailwind v4 imports + design tokens
+│  ├─ error.tsx             # Root error boundary (must be "use client")
 │  ├─ dashboard/
-│  │  ├─ page.tsx           # Dashboard page
-│  │  └─ layout.tsx         # Dashboard layout
-│  ├─ api/                   # Route handlers (if needed)
-│  │  └─ route.ts
-│  └─ error.tsx             # Error boundary
+│  │  ├─ page.tsx           # Dashboard overview page
+│  │  └─ layout.tsx         # Dashboard layout (sidebar + main)
+│  └─ api/                  # Route handlers (use sparingly)
+│     └─ route.ts
 ├─ components/
-│  ├─ ui/                   # Base UI components
-│  │  ├─ Button.tsx
-│  │  ├─ Card.tsx
-│  │  └─ Input.tsx
+│  ├─ ui/                   # shadcn/ui components (owned, editable source)
+│  │  ├─ button.tsx         # Button (uses @base-ui/react)
+│  │  ├─ button-variants.ts # buttonVariants CVA — server-safe, no "use client"
+│  │  ├─ card.tsx
+│  │  └─ input.tsx
 │  └─ features/             # Feature-specific components
-│     ├─ user-profile/
-│     └─ data-table/
+│     └─ workout-list/
+│        └─ WorkoutCard.tsx
 ├─ lib/
-│  ├─ api.ts                # API client setup
-│  ├─ auth.ts               # Auth utilities
-│  ├─ utils.ts              # Utility functions
-│  └─ hooks/                # Custom hooks
-│     └─ useAuth.ts
+│  ├─ api.ts                # apiFetch wrapper + re-exports from client-sdk
+│  ├─ utils.ts              # cn() utility (from shadcn/ui init)
+│  └─ hooks/                # Custom hooks (client-only)
+│     └─ useApi.ts
 ├─ public/                   # Static assets
-├─ styles/
-├─ tests/
-│  ├─ unit/
-│  └─ e2e/
+├─ components.json           # shadcn/ui registry config
 ├─ next.config.ts
-├─ tailwind.config.ts
 ├─ tsconfig.json
+├─ eslint.config.mjs
+├─ postcss.config.mjs
+├─ .env.example
 └─ package.json
 ```
 
@@ -47,22 +46,23 @@ apps/web/
 
 Use Server Components for:
 - Data fetching
-- Database access
 - Server-side rendering
 - SEO-critical content
+- Any component that does not need interactivity
 
 ```typescript
 // app/dashboard/page.tsx
-import { UsersService } from "@acme/client-sdk";
+import { apiFetch } from "@/lib/api";
+import type { Workout } from "@workoutbuddy/client-sdk";
 
 export default async function DashboardPage() {
-  // Fetch data on server
-  const users = await UsersService.getUsers();
+  // Fetch data on the server — no useEffect, no loading state needed
+  const workouts = await apiFetch<Workout[]>("/workouts");
 
   return (
     <div>
       <h1>Dashboard</h1>
-      <UserList users={users} />
+      <WorkoutList workouts={workouts} />
     </div>
   );
 }
@@ -70,10 +70,9 @@ export default async function DashboardPage() {
 
 ### Client Components
 
-Use Client Components for:
-- Interactive UI (buttons, forms)
-- Browser APIs (localStorage, geolocation)
-- React hooks (useState, useEffect)
+Add `"use client"` only when the component needs:
+- React hooks (`useState`, `useEffect`, etc.)
+- Browser APIs
 - Event handlers
 
 ```typescript
@@ -94,67 +93,91 @@ export function Counter() {
 
 ## Data Fetching
 
-### Server-side with Generated Client
+### Server-side (`lib/api.ts`)
 
 ```typescript
 // lib/api.ts
-import { OpenAPI } from "@acme/client-sdk";
+import { API_BASE_URL } from "@workoutbuddy/client-sdk";
 
-OpenAPI.BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export { API_BASE_URL };
 
-export { UsersService, AuthService } from "@acme/client-sdk";
+export async function apiFetch<T>(
+  path: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    ...options,
+  });
+
+  if (!response.ok) {
+    throw new Error(`API error ${response.status}: ${response.statusText}`);
+  }
+
+  return response.json() as Promise<T>;
+}
 ```
 
 ```typescript
-// app/users/page.tsx
-import { UsersService } from "@/lib/api";
+// app/workouts/page.tsx  (Server Component)
+import { apiFetch } from "@/lib/api";
+import type { Workout } from "@workoutbuddy/client-sdk";
 
-export default async function UsersPage() {
-  const users = await UsersService.getUsers();
+export default async function WorkoutsPage() {
+  const workouts = await apiFetch<Workout[]>("/workouts");
 
   return (
     <ul>
-      {users.map(user => (
-        <li key={user.id}>{user.email}</li>
-      ))}
+      {workouts.map(w => <li key={w.id}>{w.name}</li>)}
     </ul>
   );
 }
 ```
 
-### Client-side with TanStack Query
+### Client-side (`lib/hooks/useApi.ts`)
+
+A minimal hook ships by default. Swap it for **TanStack Query** when caching,
+mutations, or background refetching are needed — the interface is compatible.
 
 ```typescript
-// lib/hooks/useUsers.ts
+// lib/hooks/useApi.ts
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { UsersService } from "@acme/client-sdk";
+import { useState, useEffect } from "react";
+import { apiFetch } from "@/lib/api";
 
-export function useUsers() {
-  return useQuery({
-    queryKey: ["users"],
-    queryFn: () => UsersService.getUsers(),
-  });
+export function useApi<T>(path: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch<T>(path)
+      .then(d => { if (!cancelled) { setData(d); setIsLoading(false); } })
+      .catch(e => { if (!cancelled) { setError(e); setIsLoading(false); } });
+    return () => { cancelled = true; };
+  }, [path]);
+
+  return { data, isLoading, error };
 }
 ```
 
 ```typescript
-// components/UserListClient.tsx
+// components/features/workout-list/WorkoutListClient.tsx
 "use client";
 
-import { useUsers } from "@/lib/hooks/useUsers";
+import { useApi } from "@/lib/hooks/useApi";
+import type { Workout } from "@workoutbuddy/client-sdk";
 
-export function UserListClient() {
-  const { data: users, isLoading } = useUsers();
+export function WorkoutListClient() {
+  const { data: workouts, isLoading } = useApi<Workout[]>("/workouts");
 
-  if (isLoading) return <div>Loading...</div>;
+  if (isLoading) return <p>Loading...</p>;
 
   return (
     <ul>
-      {users?.map(user => (
-        <li key={user.id}>{user.email}</li>
-      ))}
+      {workouts?.map(w => <li key={w.id}>{w.name}</li>)}
     </ul>
   );
 }
@@ -164,34 +187,46 @@ export function UserListClient() {
 
 ### UI Components (`components/ui/`)
 
-Base, reusable components. Often from shadcn/ui or design system.
+shadcn/ui components live here as owned, editable source files — not a package
+import. Add new components with:
+
+```bash
+pnpm dlx shadcn@latest add <component-name>
+```
+
+**Important — `buttonVariants` and the client boundary:**
+
+`button.tsx` carries `"use client"` because it uses `@base-ui/react`. To apply
+button styles to a `<Link>` inside a Server Component, import `buttonVariants`
+from the separate server-safe file:
 
 ```typescript
-// components/ui/Button.tsx
-import { cn } from "@/lib/utils";
+// Server Component — safe to import
+import { buttonVariants } from "@/components/ui/button-variants";
+import Link from "next/link";
 
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "danger";
-}
+<Link href="/dashboard" className={buttonVariants({ variant: "default" })}>
+  Dashboard
+</Link>
+```
 
-export function Button({
-  className,
-  variant = "primary",
-  ...props
-}: ButtonProps) {
-  return (
-    <button
-      className={cn(
-        "px-4 py-2 rounded font-medium",
-        variant === "primary" && "bg-blue-600 text-white",
-        variant === "secondary" && "bg-gray-200 text-gray-800",
-        variant === "danger" && "bg-red-600 text-white",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+```typescript
+// Client Component — use the Button component directly
+"use client";
+import { Button } from "@/components/ui/button";
+
+<Button onClick={handleClick}>Save</Button>
+```
+
+For rendering a button as a different element in a client context, use the
+`render` prop from `@base-ui/react`:
+
+```typescript
+"use client";
+import { Button } from "@/components/ui/button";
+import Link from "next/link";
+
+<Button render={<Link href="/dashboard" />}>Dashboard</Button>
 ```
 
 ### Feature Components (`components/features/`)
@@ -199,20 +234,19 @@ export function Button({
 Domain-specific components that compose UI components.
 
 ```typescript
-// components/features/user-profile/UserProfileCard.tsx
-import { Card, Button } from "@/components/ui";
-import { User } from "@acme/client-sdk";
+// components/features/workout-list/WorkoutCard.tsx
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import type { Workout } from "@workoutbuddy/client-sdk";
 
-interface UserProfileCardProps {
-  user: User;
-  onEdit?: () => void;
-}
-
-export function UserProfileCard({ user, onEdit }: UserProfileCardProps) {
+export function WorkoutCard({ workout }: { workout: Workout }) {
   return (
     <Card>
-      <h2>{user.email}</h2>
-      <Button onClick={onEdit}>Edit Profile</Button>
+      <CardHeader>
+        <CardTitle>{workout.name}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p>{workout.duration_minutes} min</p>
+      </CardContent>
     </Card>
   );
 }
@@ -225,25 +259,22 @@ export function UserProfileCard({ user, onEdit }: UserProfileCardProps) {
 ```typescript
 // app/layout.tsx
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
+const geistSans = Geist({ variable: "--font-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Acme Platform",
-  description: "Modern full-stack application",
+  title: { default: "WorkoutBuddy", template: "%s | WorkoutBuddy" },
+  description: "Your personal workout tracking companion.",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
-        <main className="min-h-screen">{children}</main>
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${geistSans.variable} ${geistMono.variable} min-h-screen antialiased`}>
+        {children}
       </body>
     </html>
   );
@@ -254,15 +285,13 @@ export default function RootLayout({
 
 ```typescript
 // app/dashboard/layout.tsx
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex">
-      <aside className="w-64 bg-gray-100">Sidebar</aside>
-      <main className="flex-1 p-8">{children}</main>
+    <div className="flex min-h-screen">
+      <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border w-60 shrink-0 border-r">
+        {/* Sidebar nav */}
+      </aside>
+      <main className="flex-1 overflow-auto p-8">{children}</main>
     </div>
   );
 }
@@ -270,7 +299,7 @@ export default function DashboardLayout({
 
 ## Route Handlers (API Routes)
 
-Use sparingly - prefer FastAPI for business logic.
+Use sparingly — prefer FastAPI for business logic.
 
 ```typescript
 // app/api/webhook/route.ts
@@ -278,65 +307,89 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-
   // Process webhook
-
   return NextResponse.json({ success: true });
 }
 ```
 
+## Styling with Tailwind v4
+
+Tailwind v4 is **CSS-first** — there is no `tailwind.config.ts`. All theme
+customisation is done inside `globals.css` via `@theme` blocks.
+
+### Design tokens (`app/globals.css`)
+
+```css
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Brand palette — swap these 10 variables to retheme the entire app.
+     Use https://oklch.com to pick new values. */
+  --color-brand-50:  var(--brand-50);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-900: var(--brand-900);
+
+  /* shadcn/ui semantic tokens (do not remove) */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary:    var(--primary);
+  /* ... rest of shadcn tokens ... */
+}
+
+:root {
+  /* Brand color values (Tailwind blue by default) */
+  --brand-50:  oklch(0.97 0.013 246.0);
+  --brand-500: oklch(0.623 0.214 259.8);
+  --brand-600: oklch(0.546 0.245 262.9);
+  --brand-700: oklch(0.488 0.243 264.4);
+  --brand-900: oklch(0.379 0.146 265.5);
+
+  /* shadcn/ui base token values */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  /* ... */
+}
+```
+
+Tailwind v4 uses **`oklch` color space** instead of hex or `hsl()`.
+
+### Using brand colors in components
+
+```tsx
+<div className="bg-brand-600 text-white hover:bg-brand-700">
+  Primary action
+</div>
+```
+
 ## Key Patterns
 
-1. **Server Components by Default**: Start with Server Components, only use Client Components when needed
+1. **Server Components by Default**: Start with Server Components; add `"use client"` only when needed
 2. **Co-locate Data Fetching**: Fetch data close to where it's used
-3. **Use Generated Client**: Import from `@acme/client-sdk` for type-safe API calls
-4. **Shared UI Library**: Use `@acme/ui` for consistent components
-5. **Tailwind for Styling**: Utility-first CSS with consistent design tokens
-6. **Zod for Validation**: Runtime validation of external data
-7. **Parallel Data Fetching**: Use `Promise.all()` for independent requests
+3. **`buttonVariants` for links, `<Button>` for actions**: Keep the client boundary clean
+4. **Use Generated Client**: Import types from `@workoutbuddy/client-sdk`; regenerate with `pnpm generate:client` after API changes
+5. **Tailwind v4 CSS tokens**: Theme via `--brand-*` variables in `globals.css`, not via a config file
+6. **shadcn/ui is owned source**: Edit components directly; re-add via `pnpm dlx shadcn@latest add`
+7. **Parallel Data Fetching**: Use `Promise.all()` for independent server-side requests
 
 ## Environment Variables
 
-```typescript
-// .env.local
+```bash
+# apps/web/.env.local  (never commit)
 NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_APP_NAME=Acme Platform
+NEXT_PUBLIC_APP_NAME=WorkoutBuddy
 
-# Server-only
+# Server-only (no NEXT_PUBLIC_ prefix)
 API_SECRET_KEY=secret
 ```
 
-Access in code:
-- `process.env.NEXT_PUBLIC_*` - Available in browser
-- `process.env.*` - Server-side only
-
-## Styling with Tailwind
-
-```typescript
-// tailwind.config.ts
-import type { Config } from "tailwindcss";
-
-const config: Config = {
-  content: [
-    "./app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./components/**/*.{js,ts,jsx,tsx,mdx}",
-  ],
-  theme: {
-    extend: {
-      colors: {
-        brand: {
-          50: "#eff6ff",
-          500: "#3b82f6",
-          600: "#2563eb",
-        },
-      },
-    },
-  },
-  plugins: [],
-};
-
-export default config;
-```
+- `NEXT_PUBLIC_*` — available in browser and server
+- Everything else — server-side only
 
 ## Related Documents
 

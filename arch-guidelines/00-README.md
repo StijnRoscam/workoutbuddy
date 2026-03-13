@@ -9,9 +9,9 @@ Quick reference for the monorepo structure and patterns.
 |------|-------|-----|
 | FastAPI app | `apps/api/` | [FastAPI Guidelines](./02-fastapi-guidelines.md) |
 | Next.js app | `apps/web/` | [Next.js Guidelines](./03-nextjs-guidelines.md) |
-| Shared UI components | `packages/ui/` | [Monorepo Structure](./01-monorepo-structure.md) |
+| Shared UI utility (`cn`) | `packages/ui/` | [Monorepo Structure](./01-monorepo-structure.md) |
 | Auto-generated API client | `packages/client-sdk/` | [Monorepo Structure](./01-monorepo-structure.md) |
-| Shared configs | `packages/config/` | [Monorepo Structure](./01-monorepo-structure.md) |
+| Shared configs (tsconfig) | `packages/config/` | [Monorepo Structure](./01-monorepo-structure.md) |
 
 ### Infrastructure
 | What | Where | Doc |
@@ -43,8 +43,9 @@ Quick reference for the monorepo structure and patterns.
 
 **Creating a new page?**
 1. Add to `apps/web/app/` (App Router)
-2. Use shared UI components from `@acme/ui`
-3. Fetch data using generated client from `@acme/client-sdk`
+2. Use shadcn/ui components from `apps/web/components/ui/`
+3. Fetch data using `apiFetch` from `@/lib/api` (Server Components) or `useApi` hook (Client Components)
+4. When API is live, import generated types from `@workoutbuddy/client-sdk`
 
 **Adding infrastructure?**
 1. Create reusable module in `infra/terraform/modules/`
@@ -56,8 +57,9 @@ Quick reference for the monorepo structure and patterns.
 | Layer | Technology |
 |-------|------------|
 | Backend | FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic |
-| Frontend | Next.js 14/15 (App Router), TypeScript, Tailwind |
-| Monorepo | pnpm, Turborepo |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind v4 |
+| UI components | shadcn/ui (via `@base-ui/react`) |
+| Monorepo | pnpm v10, Turborepo v2 |
 | Python | uv, Ruff, mypy, pytest |
 | Database | PostgreSQL, Redis |
 | Infrastructure | Terraform, AWS |
@@ -75,12 +77,15 @@ cd apps/api && uv run uvicorn app.main:app --reload
 # Run web only
 cd apps/web && pnpm dev
 
-# Generate API client from FastAPI
+# Generate API client from FastAPI (API must be running)
 pnpm generate:client
 
 # Run tests
-pnpm test                    # Frontend
+pnpm test                    # Frontend (from root)
 cd apps/api && pytest        # Backend
+
+# Typecheck all packages
+pnpm typecheck
 
 # Terraform
 make tf-plan ENV=dev
@@ -94,6 +99,8 @@ make tf-apply ENV=dev
 3. **Same code, different config** - Use env vars, no environment-specific logic
 4. **Backward-compatible migrations** - Don't break existing code with DB changes
 5. **Type safety everywhere** - Pydantic models → OpenAPI → TypeScript client
+6. **Server Components by default** - Only add `"use client"` when interactivity is required
+7. **`buttonVariants` on links, `Button` on actions** - Use `buttonVariants` from `button-variants.ts` to style `<Link>` in Server Components; use the `<Button>` component for interactive actions
 
 ## Navigation
 
